@@ -1,0 +1,45 @@
+[Unit]
+Description=Qwen LLM Fast Server
+# Documentation=https://help.aliyun.com/zh/dashscope/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=qwenuser
+Group=qwenuser
+
+# 使用conda环境
+WorkingDirectory=/opt/qwen-fast
+ExecStart=/usr/bin/python3 /opt/qwen-fast/server.py
+
+# 环境变量
+Environment=DASHSCOPE_API_KEY=sk-5fbb9b6b44ba49dc9be952a51fa5bf0f
+Environment=PYTHONUNBUFFERED=1
+
+# 重启策略
+Restart=always
+RestartSec=10s
+StartLimitInterval=60
+StartLimitBurst=5
+
+# 资源限制（大模型需要更多内存）
+MemoryLimit=2G
+MemorySwapMax=4G
+CPUQuota=100%
+LimitNOFILE=65536
+
+# 安全配置
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/tmp /var/log
+PrivateTmp=false
+PrivateDevices=true
+
+# 进程管理
+TimeoutStartSec=120  # 模型加载可能需要时间
+TimeoutStopSec=30
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
