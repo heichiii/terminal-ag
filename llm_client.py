@@ -73,8 +73,8 @@ class QwenLLMClient:
                 "temperature": kwargs.get("temperature", 0.9),
                 "max_tokens": kwargs.get("max_tokens", 1500),
             }
-            
             if stream:
+                # 返回一个迭代器，按块产出内容
                 return self._stream_response(params)
             else:
                 response = self.client.chat.completions.create(**params)
@@ -90,17 +90,18 @@ class QwenLLMClient:
         """处理流式响应"""
         try:
             response = self.client.chat.completions.create(**params)
-            full_response = ""
-            
             for chunk in response:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    content = chunk.choices[0].delta.content
-                    full_response += content
-            
-            return full_response
+                try:
+                    delta = chunk.choices[0].delta
+                except Exception:
+                    continue
+                # delta may not always contain content (e.g. meta chunks)
+                content = getattr(delta, 'content', None)
+                if content:
+                    yield content
         except Exception as e:
             syslog.syslog(syslog.LOG_ERR, f"流式响应错误: {str(e)}")
-            return ""
+            return
     
     def cleanup(self):
         """清理资源"""

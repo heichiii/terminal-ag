@@ -45,7 +45,7 @@ class QwenClient:
             return None
     
     def send_request(self, request):
-        """发送请求到服务器"""
+        """发送请求到服务器。支持 stream 模式（实时打印块并返回完整响应）。"""
         sock = self.connect()
         if not sock:
             return None
@@ -54,21 +54,63 @@ class QwenClient:
             # 发送请求
             request_json = json.dumps(request, ensure_ascii=False)
             sock.send(request_json.encode('utf-8') + b"__END__")
-            
-            # 接收响应
-            response_data = b""
+
+            # 如果不是流式，按现有方式一次性读取完整响应
+            if not request.get('stream', False):
+                response_data = b""
+                while True:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        break
+                    response_data += chunk
+                    if b"__END__" in response_data:
+                        break
+
+                response_str = response_data.decode('utf-8').replace("__END__", "")
+                try:
+                    return json.loads(response_str)
+                except Exception:
+                    return None
+
+            # 流式接收：按块处理 __STREAM__，在结束时返回完整响应
+            buffer = b""
+            full_text = ""
+            final_obj = {}
             while True:
                 chunk = sock.recv(4096)
                 if not chunk:
                     break
-                response_data += chunk
-                if b"__END__" in response_data:
-                    break
-            
-            # 解析响应
-            response_str = response_data.decode('utf-8').replace("__END__", "")
-            return json.loads(response_str)
-            
+                buffer += chunk
+
+                # 处理所有完整的流块
+                while b"__STREAM__" in buffer:
+                    part, buffer = buffer.split(b"__STREAM__", 1)
+                    if not part:
+                        continue
+                    try:
+                        obj = json.loads(part.decode('utf-8'))
+                    except Exception:
+                        continue
+                    if 'chunk' in obj:
+                        text = obj['chunk']
+                        print(text, end="", flush=True)
+                        full_text += text
+
+                # 结束标记
+                if b"__END__" in buffer:
+                    part, _rest = buffer.split(b"__END__", 1)
+                    if part:
+                        try:
+                            final_obj = json.loads(part.decode('utf-8'))
+                        except Exception:
+                            final_obj = {}
+                    # 打印换行以结束实时输出
+                    print()
+                    result = {"response": full_text}
+                    if isinstance(final_obj, dict):
+                        result.update(final_obj)
+                    return result
+
         except Exception as e:
             print(f"通信错误: {e}")
             return None
@@ -109,18 +151,16 @@ class QwenClient:
                 request = {
                     "action": "chat",
                     "messages": conversation_history,
-                    "stream": False
+                    "stream": True
                 }
-                
+
                 response = self.send_request(request)
-                
+
                 if response and "response" in response:
                     assistant_reply = response["response"]
-                    print(assistant_reply)
-                    
-                    # 添加到历史
+                    # 流式模式已经实时打印了内容，这里只需加入历史
                     conversation_history.append({
-                        "role": "assistant", 
+                        "role": "assistant",
                         "content": assistant_reply
                     })
                 else:

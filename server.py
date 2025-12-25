@@ -95,9 +95,15 @@ class QwenServer:
                 return
             
             # 处理请求
+            # 流式请求单独处理
+            action = request.get("action", "chat")
+            if action == "chat" and request.get("stream", False):
+                # 交由流式处理函数逐块发送
+                self.process_chat_stream(request, client_socket)
+                return
+
+            # 普通请求处理并发送响应
             response = self.process_request(request)
-            
-            # 发送响应
             response_json = json.dumps(response, ensure_ascii=False)
             client_socket.send(response_json.encode('utf-8') + b"__END__")
             
@@ -148,6 +154,53 @@ class QwenServer:
             
         except Exception as e:
             return {"error": f"模型请求失败: {str(e)}"}
+
+    def process_chat_stream(self, request, client_socket):
+        """处理流式对话请求：逐块将生成结果发送给客户端"""
+        messages = request.get("messages", [])
+        if not messages:
+            err = {"error": "消息不能为空"}
+            client_socket.send(json.dumps(err, ensure_ascii=False).encode('utf-8') + b"__END__")
+            return
+
+        try:
+            # 获取流式生成器
+            gen = self.llm_client.chat_completion(
+                messages=messages,
+                stream=True,
+                temperature=request.get("temperature", 0.9),
+                max_tokens=request.get("max_tokens", 2000)
+            )
+
+            if gen is None:
+                err = {"error": "无法启动流式响应"}
+                client_socket.send(json.dumps(err, ensure_ascii=False).encode('utf-8') + b"__END__")
+                return
+
+            # 逐块发送
+            full = ""
+            for chunk in gen:
+                if not chunk:
+                    continue
+                full += chunk
+                payload = {"chunk": chunk}
+                try:
+                    client_socket.sendall(json.dumps(payload, ensure_ascii=False).encode('utf-8') + b"__STREAM__")
+                except Exception as e:
+                    syslog.syslog(syslog.LOG_ERR, f"发送流块失败: {str(e)}")
+                    break
+
+            # 发送结束标记并返回完整结果
+            final = {"done": True, "response": full, "tokens": len(full) // 4}
+            client_socket.sendall(json.dumps(final, ensure_ascii=False).encode('utf-8') + b"__END__")
+
+        except Exception as e:
+            syslog.syslog(syslog.LOG_ERR, f"流式处理失败: {str(e)}")
+            error_response = {"error": f"服务器内部错误: {str(e)}"}
+            try:
+                client_socket.send(json.dumps(error_response, ensure_ascii=False).encode('utf-8') + b"__END__")
+            except:
+                pass
     
     def get_status(self):
         """获取服务状态"""
